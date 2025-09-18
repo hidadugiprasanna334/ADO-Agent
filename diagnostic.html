@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Endpoint Diagnostics</title>
+    <style>
+        body {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #569cd6;
+            border-bottom: 2px solid #569cd6;
+            padding-bottom: 10px;
+        }
+        .info {
+            background: #2d2d30;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success { color: #4ec9b0; }
+        .error { color: #f44747; }
+        .warning { color: #dcdcaa; }
+        pre {
+            background: #2d2d30;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Azure AI Foundry Endpoint Diagnostics</h1>
+        
+        <div class="info">
+            <strong>Purpose:</strong> This diagnostic tool tests different Azure endpoint formats to find the correct one for your Azure AI Foundry resource.
+        </div>
+        
+        <div class="info">
+            <strong>Resource Details:</strong><br>
+            • Resource Name: dev-ai-foundry-res-01<br>
+            • Project: dev-ai-foundry-res-prj-01<br>
+            • Agent: ADOTicketAgent (asst_Cabj69cF5rOLCHdSovbzP1fb)<br>
+            • Location: eastus
+        </div>
+        
+        <div class="info">
+            <strong>Instructions:</strong><br>
+            1. Open your browser's Developer Tools (F12)<br>
+            2. Go to the Console tab<br>
+            3. Watch for the diagnostic results<br>
+            4. Look for the ✅ SUCCESS message with the working endpoint
+        </div>
+        
+        <div id="status" class="info">
+            <strong>Status:</strong> <span class="warning">Running diagnostics... Check console for results.</span>
+        </div>
+    </div>
+
+    <script src="diagnostic.js"></script>
+</body>
+</html>
