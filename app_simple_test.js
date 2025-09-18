@@ -53,7 +53,7 @@ class SimpleAzureClient {
         const message = document.getElementById('messageInput').value.trim();
         if (!message) return;
         
-        console.log('📝 Sending message:', message);
+        console.log('� Sending message to conversation:', message);
         
         // Add user message to chat
         this.addMessage(message, 'user');
@@ -64,45 +64,33 @@ class SimpleAzureClient {
         this.addProcessingMessage(processingId);
         
         try {
-            // Create thread
-            const threadResponse = await fetch('http://localhost:3000/api/threads', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const thread = await threadResponse.json();
-            console.log('🧵 Thread:', thread.id);
-            
-            // Send message
-            await fetch(`http://localhost:3000/api/threads/${thread.id}/messages`, {
+            // Send message to persistent conversation
+            const response = await fetch('http://localhost:3000/api/conversation/message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ role: 'user', content: message })
+                body: JSON.stringify({ content: message })
             });
             
-            // Create run
-            const runResponse = await fetch(`http://localhost:3000/api/threads/${thread.id}/runs`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ assistant_id: 'asst_z6VW8C4AvFgj54g4EPzazeBu' })  // InputUnderstandingAgent
-            });
-            
-            if (!runResponse.ok) {
-                throw new Error(`Run creation failed: ${runResponse.status} ${runResponse.statusText}`);
+            if (!response.ok) {
+                throw new Error(`Conversation failed: ${response.status} ${response.statusText}`);
             }
             
-            const run = await runResponse.json();
-            console.log('🏃 Full Run Response:', run);
+            const result = await response.json();
+            console.log('🤖 Conversation result:', result);
             
-            // Validate run object
-            if (!run || !run.id) {
-                console.error('❌ Invalid run object received:', run);
-                throw new Error('Run creation failed - no valid run ID received');
+            // Remove processing message
+            this.removeProcessingMessage(processingId);
+            
+            if (result.success && result.agentResponse) {
+                // Add agent response to chat
+                this.addAgentResponse(result.agentResponse, result.fullResponse);
+                
+                // Show conversation stats
+                console.log(`💭 Conversation now has ${result.conversationHistory.length} messages`);
+                this.updateConversationStats(result.conversationHistory.length, result.threadId);
+            } else {
+                throw new Error('No agent response received');
             }
-            
-            console.log('✅ Valid Run ID:', run.id);
-            
-            // Wait for completion and get the actual response (processing message will be removed in waitForAgentResponse)
-            await this.waitForAgentResponse(thread.id, run.id, processingId);
             
         } catch (error) {
             console.error('❌ Error:', error);
@@ -392,6 +380,224 @@ ${fullResponse}
         messageDiv.className = `message ${type}-message`;
         messageDiv.innerHTML = `<div class="message-content">${content.replace(/\n/g, '<br>')}</div>`;
         container.appendChild(messageDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+    
+    updateConversationStats(messageCount, threadId) {
+        // Update or create conversation stats display
+        let statsDiv = document.getElementById('conversationStats');
+        if (!statsDiv) {
+            statsDiv = document.createElement('div');
+            statsDiv.id = 'conversationStats';
+            statsDiv.className = 'conversation-stats';
+            
+            const chatContainer = document.getElementById('chatMessages').parentElement;
+            chatContainer.insertBefore(statsDiv, document.getElementById('chatMessages'));
+        }
+        
+        statsDiv.innerHTML = `
+            <div class="stats-content">
+                <span class="stats-label">🧵 Conversation Thread:</span>
+                <span class="stats-value">${threadId}</span>
+                <span class="stats-label">💬 Messages:</span>
+                <span class="stats-value">${messageCount}</span>
+                <button id="resetConversation" class="reset-button">🔄 New Conversation</button>
+            </div>
+        `;
+        
+        // Bind reset button
+        document.getElementById('resetConversation').addEventListener('click', () => {
+            this.resetConversation();
+        });
+    }
+    
+    async resetConversation() {
+        try {
+            const response = await fetch('http://localhost:3000/api/conversation/reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (response.ok) {
+                // Clear chat messages
+                document.getElementById('chatMessages').innerHTML = '';
+                
+                // Clear stats
+                const statsDiv = document.getElementById('conversationStats');
+                if (statsDiv) {
+                    statsDiv.remove();
+                }
+                
+                this.addMessage('🔄 Started new conversation. The agent will no longer remember previous messages.', 'system');
+                console.log('✅ Conversation reset successfully');
+            }
+        } catch (error) {
+            console.error('❌ Error resetting conversation:', error);
+            this.addMessage('❌ Error resetting conversation', 'error');
+        }
+    }
+    
+    addAgentResponse(agentResponse, fullResponse) {
+        const container = document.getElementById('chatMessages');
+        const responseDiv = document.createElement('div');
+        responseDiv.className = 'message agent-message';
+        
+        let displayContent = '';
+        let parsedResponse = agentResponse;
+        
+        // Try to extract JSON from markdown code blocks if needed
+        if (typeof agentResponse === 'string' || (fullResponse && typeof fullResponse === 'string')) {
+            const responseText = fullResponse || agentResponse;
+            console.log('🔍 Parsing response text:', responseText);
+            
+            // Extract JSON from markdown code blocks: ```json { ... } ```
+            const jsonMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+            if (jsonMatch) {
+                try {
+                    parsedResponse = JSON.parse(jsonMatch[1]);
+                    console.log('✅ Extracted JSON from markdown:', parsedResponse);
+                } catch (parseError) {
+                    console.log('❌ Failed to parse extracted JSON:', parseError);
+                    parsedResponse = agentResponse;
+                }
+            }
+        }
+        
+        // If we have structured response, display it nicely
+        if (parsedResponse && typeof parsedResponse === 'object') {
+            if (parsedResponse.workItemId || parsedResponse.url) {
+                // Final ADO Work Item Success Response
+                displayContent = `
+                    <div class="final-success-card">
+                        <div class="final-success-header">
+                            <div class="celebration-icons">
+                                <span class="celebration-icon">🎉</span>
+                                <span class="celebration-icon">🎫</span>
+                                <span class="celebration-icon">✨</span>
+                            </div>
+                            <div class="final-success-title">Work Item Created Successfully!</div>
+                            <div class="final-success-subtitle">Your ticket is now live in Azure DevOps</div>
+                        </div>
+                        <div class="work-item-details">
+                            <div class="work-item-id-section">
+                                <div class="work-item-label">Work Item ID</div>
+                                <div class="work-item-id">#${parsedResponse.workItemId}</div>
+                            </div>
+                            <div class="work-item-url-section">
+                                <div class="work-item-label">Azure DevOps Link</div>
+                                <a href="${parsedResponse.url}" target="_blank" class="work-item-url">
+                                    <span class="url-icon">🔗</span>
+                                    View in Azure DevOps
+                                    <span class="external-icon">↗</span>
+                                </a>
+                            </div>
+                            ${parsedResponse.title ? `<div class="additional-field"><span class="field-label">Title:</span><span class="field-value">${parsedResponse.title}</span></div>` : ''}
+                            ${parsedResponse.description ? `<div class="additional-field"><span class="field-label">Description:</span><span class="field-value">${parsedResponse.description}</span></div>` : ''}
+                            ${parsedResponse.assignedTo ? `<div class="additional-field"><span class="field-label">Assigned To:</span><span class="field-value">${parsedResponse.assignedTo}</span></div>` : ''}
+                            ${parsedResponse.priority ? `<div class="additional-field"><span class="field-label">Priority:</span><span class="field-value">${parsedResponse.priority}</span></div>` : ''}
+                            ${parsedResponse.storyPoints ? `<div class="additional-field"><span class="field-label">Story Points:</span><span class="field-value">${parsedResponse.storyPoints}</span></div>` : ''}
+                            ${parsedResponse.project ? `<div class="additional-field"><span class="field-label">Project:</span><span class="field-value">${parsedResponse.project}</span></div>` : ''}
+                            ${parsedResponse.state ? `<div class="additional-field"><span class="field-label">State:</span><span class="field-value">${parsedResponse.state}</span></div>` : ''}
+                            ${parsedResponse.areaPath ? `<div class="additional-field"><span class="field-label">Area Path:</span><span class="field-value">${parsedResponse.areaPath}</span></div>` : ''}
+                            ${parsedResponse.iterationPath ? `<div class="additional-field"><span class="field-label">Iteration Path:</span><span class="field-value">${parsedResponse.iterationPath}</span></div>` : ''}
+                            ${parsedResponse.acceptanceCriteria ? `<div class="additional-field"><span class="field-label">Acceptance Criteria:</span><span class="field-value">${parsedResponse.acceptanceCriteria}</span></div>` : ''}
+                            ${parsedResponse.ticketType ? `<div class="additional-field"><span class="field-label">Ticket Type:</span><span class="field-value">${parsedResponse.ticketType}</span></div>` : ''}
+                            ${parsedResponse.message ? `<div class="additional-field"><span class="field-label">Message:</span><span class="field-value">${parsedResponse.message}</span></div>` : ''}
+                        </div>
+                        <div class="final-success-footer">
+                            <div class="success-message">
+                                🚀 Your ticket has been successfully created and is ready for the team!
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (parsedResponse.message) {
+                // Check if we have data field (like ticket confirmation)
+                if (parsedResponse.data && typeof parsedResponse.data === 'object') {
+                    // Show both data and message for confirmation
+                    const data = parsedResponse.data;
+                    displayContent = `
+                        <div class="confirmation-card">
+                            <div class="confirmation-header">
+                                <div class="confirmation-icon">🎫</div>
+                                <div class="confirmation-title">Ticket Draft Ready</div>
+                            </div>
+                            <div class="ticket-details">
+                                ${data.title ? `<div class="detail-row"><span class="detail-label">Title:</span><span class="detail-value">${data.title}</span></div>` : ''}
+                                ${data.description ? `<div class="detail-row"><span class="detail-label">Description:</span><span class="detail-value">${data.description}</span></div>` : ''}
+                                ${data.assignedTo ? `<div class="detail-row"><span class="detail-label">Assigned To:</span><span class="detail-value">${data.assignedTo}</span></div>` : ''}
+                                ${data.priority ? `<div class="detail-row"><span class="detail-label">Priority:</span><span class="detail-value">${data.priority}</span></div>` : ''}
+                                ${data.storyPoints ? `<div class="detail-row"><span class="detail-label">Story Points:</span><span class="detail-value">${data.storyPoints}</span></div>` : ''}
+                                ${data.areaPath ? `<div class="detail-row"><span class="detail-label">Area Path:</span><span class="detail-value">${data.areaPath}</span></div>` : ''}
+                                ${data.iterationPath ? `<div class="detail-row"><span class="detail-label">Iteration Path:</span><span class="detail-value">${data.iterationPath}</span></div>` : ''}
+                                ${data.project ? `<div class="detail-row"><span class="detail-label">Project:</span><span class="detail-value">${data.project}</span></div>` : ''}
+                                ${data.state ? `<div class="detail-row"><span class="detail-label">State:</span><span class="detail-value">${data.state}</span></div>` : ''}
+                                ${data.acceptanceCriteria ? `<div class="detail-row"><span class="detail-label">Acceptance Criteria:</span><span class="detail-value">${data.acceptanceCriteria}</span></div>` : ''}
+                            </div>
+                            <div class="confirmation-message">
+                                <div class="message-icon">🤖</div>
+                                <div class="message-text">${parsedResponse.message}</div>
+                            </div>
+                        </div>
+                    `;
+                } else if (parsedResponse.status === 'success' && (parsedResponse.title || parsedResponse.intent)) {
+                    // Success response with ticket fields directly in the response
+                    displayContent = `
+                        <div class="success-card">
+                            <div class="success-header">
+                                <div class="success-icon">✅</div>
+                                <div class="success-title">Ticket Created Successfully!</div>
+                                ${parsedResponse.ticketType ? `<div class="ticket-type">${parsedResponse.ticketType}</div>` : ''}
+                            </div>
+                            <div class="ticket-details">
+                                ${parsedResponse.title ? `<div class="detail-row"><span class="detail-label">Title:</span><span class="detail-value">${parsedResponse.title}</span></div>` : ''}
+                                ${parsedResponse.description ? `<div class="detail-row"><span class="detail-label">Description:</span><span class="detail-value">${parsedResponse.description}</span></div>` : ''}
+                                ${parsedResponse.assignedTo ? `<div class="detail-row"><span class="detail-label">Assigned To:</span><span class="detail-value">${parsedResponse.assignedTo}</span></div>` : ''}
+                                ${parsedResponse.priority ? `<div class="detail-row"><span class="detail-label">Priority:</span><span class="detail-value">${parsedResponse.priority}</span></div>` : ''}
+                                ${parsedResponse.storyPoints ? `<div class="detail-row"><span class="detail-label">Story Points:</span><span class="detail-value">${parsedResponse.storyPoints}</span></div>` : ''}
+                                ${parsedResponse.areaPath ? `<div class="detail-row"><span class="detail-label">Area Path:</span><span class="detail-value">${parsedResponse.areaPath}</span></div>` : ''}
+                                ${parsedResponse.iterationPath ? `<div class="detail-row"><span class="detail-label">Iteration Path:</span><span class="detail-value">${parsedResponse.iterationPath}</span></div>` : ''}
+                                ${parsedResponse.project ? `<div class="detail-row"><span class="detail-label">Project:</span><span class="detail-value">${parsedResponse.project}</span></div>` : ''}
+                                ${parsedResponse.state ? `<div class="detail-row"><span class="detail-label">State:</span><span class="detail-value">${parsedResponse.state}</span></div>` : ''}
+                                ${parsedResponse.acceptanceCriteria ? `<div class="detail-row"><span class="detail-label">Acceptance Criteria:</span><span class="detail-value">${parsedResponse.acceptanceCriteria}</span></div>` : ''}
+                                ${parsedResponse.intent ? `<div class="detail-row"><span class="detail-label">Intent:</span><span class="detail-value">${parsedResponse.intent}</span></div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Simple message only
+                    displayContent = `
+                        <div class="message-card">
+                            <div class="message-icon">🤖</div>
+                            <div class="message-content">
+                                ${parsedResponse.message}
+                            </div>
+                        </div>
+                    `;
+                }
+            } else {
+                // Generic object response
+                displayContent = `<div class="agent-content"><pre>${JSON.stringify(parsedResponse, null, 2)}</pre></div>`;
+            }
+        } else {
+            // Plain text response
+            displayContent = `<div class="agent-content">${fullResponse || 'No response content'}</div>`;
+        }
+        
+        // Always show full response in expandable section
+        displayContent += `
+            <div class="full-response-section">
+                <button class="toggle-full-response" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
+                    📋 Show Full Response
+                </button>
+                <div class="full-response-content" style="display: none;">
+                    <pre>${fullResponse || 'No full response available'}</pre>
+                </div>
+            </div>
+        `;
+        
+        responseDiv.innerHTML = displayContent;
+        container.appendChild(responseDiv);
         container.scrollTop = container.scrollHeight;
     }
 }

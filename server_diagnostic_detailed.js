@@ -23,6 +23,8 @@ const AZURE_CONFIG = {
 };
 
 let projectClient = null;
+let conversationThread = null;  // Persistent thread for conversation continuity
+let conversationHistory = [];   // Track conversation history
 
 // Detailed logging function
 function logDetailed(level, title, data = null) {
@@ -115,7 +117,64 @@ app.get('/api/health', (req, res) => {
     res.json(healthInfo);
 });
 
-// Create thread with detailed logging
+// Get or create the persistent conversation thread
+app.get('/api/conversation/thread', async (req, res) => {
+    logDetailed('INFO', 'CONVERSATION THREAD REQUEST received');
+    
+    try {
+        if (!projectClient) {
+            logDetailed('ERROR', 'Azure client not initialized');
+            return res.status(500).json({ error: 'Azure client not initialized' });
+        }
+        
+        // If we don't have a conversation thread, create one
+        if (!conversationThread) {
+            logDetailed('INFO', 'Creating new conversation thread');
+            const startTime = Date.now();
+            
+            conversationThread = await projectClient.agents.threads.create();
+            const endTime = Date.now();
+            
+            logDetailed('SUCCESS', 'New conversation thread created', {
+                threadId: conversationThread.id,
+                duration: `${endTime - startTime}ms`
+            });
+        } else {
+            logDetailed('INFO', 'Returning existing conversation thread', {
+                threadId: conversationThread.id
+            });
+        }
+        
+        res.json({
+            threadId: conversationThread.id,
+            conversationHistory: conversationHistory,
+            isNew: !conversationHistory.length
+        });
+        
+    } catch (error) {
+        logDetailed('ERROR', 'Error getting/creating conversation thread', {
+            message: error.message,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            error: error.message,
+            details: error.stack
+        });
+    }
+});
+
+// Reset conversation (create new thread)
+app.post('/api/conversation/reset', async (req, res) => {
+    logDetailed('INFO', 'CONVERSATION RESET REQUEST received');
+    
+    conversationThread = null;
+    conversationHistory = [];
+    
+    logDetailed('SUCCESS', 'Conversation reset successfully');
+    res.json({ success: true, message: 'Conversation reset' });
+});
+
+// Create thread with detailed logging (legacy endpoint)
 app.post('/api/threads', async (req, res) => {
     logDetailed('INFO', 'THREAD CREATION REQUEST received');
     
@@ -153,7 +212,270 @@ app.post('/api/threads', async (req, res) => {
     }
 });
 
-// Create message with detailed logging
+// Send message to conversation (uses persistent thread)
+app.post('/api/conversation/message', async (req, res) => {
+    const { content } = req.body;
+    
+    logDetailed('INFO', 'CONVERSATION MESSAGE REQUEST received', {
+        content,
+        contentLength: content ? content.length : 0,
+        currentThreadId: conversationThread?.id || 'none'
+    });
+    
+    try {
+        if (!projectClient) {
+            logDetailed('ERROR', 'Azure client not initialized');
+            return res.status(500).json({ error: 'Azure client not initialized' });
+        }
+        
+        // Ensure we have a conversation thread
+        if (!conversationThread) {
+            logDetailed('INFO', 'Creating conversation thread for first message');
+            conversationThread = await projectClient.agents.threads.create();
+            logDetailed('SUCCESS', 'Conversation thread created', {
+                threadId: conversationThread.id
+            });
+        }
+        
+        const threadId = conversationThread.id;
+        
+        // Add user message to conversation history
+        const userMessage = {
+            role: 'user',
+            content,
+            timestamp: new Date().toISOString()
+        };
+        conversationHistory.push(userMessage);
+        
+        // Send user message to thread
+        logDetailed('INFO', 'Adding user message to thread', {
+            threadId,
+            messageCount: conversationHistory.length
+        });
+        
+        const startTime = Date.now();
+        await projectClient.agents.messages.create(threadId, 'user', content);
+        
+        // Create and wait for run completion
+        const runResponse = await projectClient.agents.runs.create(threadId, AZURE_CONFIG.agentId);
+        
+        logDetailed('INFO', 'Run created, waiting for completion', {
+            runId: runResponse.id,
+            status: runResponse.status
+        });
+        
+        // Poll for completion with longer timeout for interactive agent
+        let runStatus = runResponse;
+        let attempts = 0;
+        const maxAttempts = 60; // 60 seconds for interactive agent
+        
+        while (runStatus.status === "queued" || runStatus.status === "in_progress") {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second intervals
+            runStatus = await projectClient.agents.runs.get(threadId, runStatus.id);
+            attempts++;
+            
+            logDetailed('INFO', `Run status check ${attempts}/${maxAttempts}`, {
+                status: runStatus.status,
+                runId: runStatus.id,
+                elapsedTime: `${attempts * 2}s`
+            });
+            
+            if (attempts >= maxAttempts) {
+                throw new Error('Run timeout - exceeded maximum wait time');
+            }
+        }
+        
+        const endTime = Date.now();
+        
+        // Get agent response with detailed inspection
+        let agentResponse = null;
+        let fullAgentText = null;
+        let outputSource = 'none';
+        
+        if (runStatus.status === "completed") {
+            // DETAILED RUN OBJECT INSPECTION
+            logDetailed('DEBUG', 'DETAILED RUN OBJECT INSPECTION', {
+                status: runStatus.status,
+                hasOutput: !!runStatus.output,
+                availableProperties: Object.keys(runStatus)
+            });
+            
+            if (runStatus.output) {
+                logDetailed('DEBUG', 'Run output structure', {
+                    type: typeof runStatus.output,
+                    isArray: Array.isArray(runStatus.output),
+                    output: runStatus.output
+                });
+            }
+            
+            // Try to get output from run.output
+            if (runStatus.output?.data?.length > 0) {
+                logDetailed('INFO', 'Trying to get output from run.output.data');
+                const outputData = runStatus.output.data[0];
+                if (outputData.content?.[0]?.text?.value) {
+                    fullAgentText = outputData.content[0].text.value;
+                    outputSource = 'run.output';
+                    
+                    try {
+                        agentResponse = JSON.parse(fullAgentText);
+                    } catch {
+                        agentResponse = { message: fullAgentText };
+                    }
+                    
+                    logDetailed('SUCCESS', 'Found response in run.output', {
+                        responseLength: fullAgentText.length,
+                        parsed: !!agentResponse
+                    });
+                }
+            }
+            
+            // If no output from run, get messages from thread
+            if (!agentResponse) {
+                logDetailed('INFO', 'No output from run, trying thread messages');
+                
+                // Add longer delay to ensure agent response is added to thread
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                const messages = await projectClient.agents.messages.list(threadId);
+                
+                logDetailed('DEBUG', 'ENHANCED Thread messages analysis', {
+                    responseType: typeof messages,
+                    responseKeys: Object.keys(messages || {}),
+                    hasData: !!messages?.data,
+                    dataLength: messages?.data?.length || 0,
+                    isArray: Array.isArray(messages),
+                    fullStructure: JSON.stringify(messages, null, 2)
+                });
+                
+                // Try different message list structures
+                let messageList = messages?.data || messages?.messages || (Array.isArray(messages) ? messages : []);
+                
+                logDetailed('DEBUG', 'Final message list analysis', {
+                    messageCount: messageList?.length || 0,
+                    messageListExists: !!messageList
+                });
+                
+                // If still no messages, the API returns a paginated iterator - we need to iterate through it
+                if (!messageList || messageList.length === 0) {
+                    logDetailed('WARN', 'First attempt returned no messages, trying pagination iterator');
+                    
+                    try {
+                        const messagesIterator = await projectClient.agents.messages.list(threadId);
+                        logDetailed('DEBUG', 'Messages iterator received', {
+                            type: typeof messagesIterator,
+                            keys: Object.keys(messagesIterator || {}),
+                            hasNext: !!messagesIterator?.next,
+                            hasByPage: !!messagesIterator?.byPage
+                        });
+                        
+                        // Iterate through paginated results
+                        const allMessages = [];
+                        if (messagesIterator && typeof messagesIterator[Symbol.asyncIterator] === 'function') {
+                            logDetailed('INFO', 'Iterating through paginated messages');
+                            for await (const message of messagesIterator) {
+                                allMessages.push(message);
+                                logDetailed('DEBUG', `Found message ${allMessages.length}`, {
+                                    role: message.role,
+                                    id: message.id,
+                                    hasContent: !!message.content
+                                });
+                            }
+                        }
+                        
+                        logDetailed('SUCCESS', 'Pagination complete', {
+                            totalMessages: allMessages.length
+                        });
+                        
+                        messageList = allMessages;
+                        
+                    } catch (paginationError) {
+                        logDetailed('ERROR', 'Pagination iteration failed', { 
+                            error: paginationError.message,
+                            stack: paginationError.stack 
+                        });
+                    }
+                }
+                
+                if (messageList && messageList.length > 0) {
+                    messageList.forEach((msg, index) => {
+                        logDetailed('DEBUG', `Message ${index + 1}`, {
+                            role: msg.role,
+                            id: msg.id,
+                            textContent: msg.content?.[0]?.text?.value
+                        });
+                    });
+                    
+                    // Look for assistant messages
+                    const assistantMessages = messageList.filter(msg => msg.role === 'assistant');
+                    
+                    if (assistantMessages.length > 0) {
+                        const lastAssistantMessage = assistantMessages[0];
+                        
+                        if (lastAssistantMessage?.content?.[0]?.text?.value) {
+                            fullAgentText = lastAssistantMessage.content[0].text.value;
+                            outputSource = 'thread.messages';
+                            
+                            try {
+                                agentResponse = JSON.parse(fullAgentText);
+                            } catch {
+                                agentResponse = { message: fullAgentText };
+                            }
+                            
+                            logDetailed('SUCCESS', 'Found response in thread messages', {
+                                responseLength: fullAgentText.length,
+                                parsed: !!agentResponse
+                            });
+                        }
+                    }
+                } else {
+                    logDetailed('ERROR', 'CRITICAL: No messages found in thread despite agent completion!');
+                }
+            }
+        }
+        
+        // Add agent response to conversation history
+        if (agentResponse) {
+            const assistantMessage = {
+                role: 'assistant',
+                content: fullAgentText || JSON.stringify(agentResponse),
+                parsed: agentResponse,
+                timestamp: new Date().toISOString()
+            };
+            conversationHistory.push(assistantMessage);
+        }
+        
+        logDetailed('SUCCESS', 'Conversation message completed', {
+            duration: `${endTime - startTime}ms`,
+            conversationLength: conversationHistory.length,
+            agentResponseReceived: !!agentResponse,
+            outputSource: outputSource,
+            fullResponseLength: fullAgentText?.length || 0,
+            runStatusFinal: runStatus.status
+        });
+        
+        res.json({
+            success: true,
+            threadId,
+            userMessage: userMessage,
+            agentResponse: agentResponse,
+            fullResponse: fullAgentText,
+            conversationHistory: conversationHistory,
+            runStatus: runStatus.status
+        });
+        
+    } catch (error) {
+        logDetailed('ERROR', 'Error in conversation message', {
+            message: error.message,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            error: error.message,
+            details: error.stack
+        });
+    }
+});
+
+// Create message with detailed logging (legacy endpoint)
 app.post('/api/threads/:threadId/messages', async (req, res) => {
     const { threadId } = req.params;
     const { role, content } = req.body;
