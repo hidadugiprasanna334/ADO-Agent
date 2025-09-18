@@ -20,11 +20,11 @@ class SimpleAzureClient {
                 
                 if (data.status === 'ok' && data.azure_client === 'initialized') {
                     this.connected = true;
-                    document.getElementById('statusText').textContent = 'Connected to Azure Foundry Agent';
+                    document.getElementById('statusText').textContent = 'Online';
                     document.getElementById('statusIndicator').className = 'status-indicator connected';
                     document.getElementById('messageInput').disabled = false;
                     document.getElementById('sendButton').disabled = false;
-                    document.getElementById('messageInput').placeholder = 'Type your message to InputUnderstandingAgent...';
+                    document.getElementById('messageInput').placeholder = 'Type your message to create ADO tickets...';
                     console.log('✅ Connection successful!');
                     return true;
                 } else {
@@ -100,7 +100,7 @@ class SimpleAzureClient {
     }
     
     addProcessingMessage(id) {
-        const container = document.getElementById('chatMessages');
+        const container = document.getElementById('messagesContainer');
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message assistant-message processing';
         messageDiv.id = id;
@@ -109,8 +109,8 @@ class SimpleAzureClient {
                 <div class="processing-card">
                     <div class="processing-spinner"></div>
                     <div class="processing-text">
-                        <h4>🤖 InputUnderstandingAgent is working...</h4>
-                        <p>Processing your request</p>
+                        <h4>🔄 Your request is under process</h4>
+                        <p>Please wait while we handle your request</p>
                         <div class="processing-dots">
                             <span>.</span><span>.</span><span>.</span>
                         </div>
@@ -119,7 +119,7 @@ class SimpleAzureClient {
             </div>
         `;
         container.appendChild(messageDiv);
-        container.scrollTop = container.scrollHeight;
+        document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
     }
     
     removeProcessingMessage(id) {
@@ -247,7 +247,7 @@ class SimpleAzureClient {
     }
     
     addFullResponseCard(adoData, fullResponse, threadId, runId, isError = false) {
-        const container = document.getElementById('chatMessages');
+        const container = document.getElementById('messagesContainer');
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message assistant-message';
         
@@ -339,7 +339,7 @@ ${fullResponse}
     }
     
     addAgentResponseCard(response, threadId, runId) {
-        const container = document.getElementById('chatMessages');
+        const container = document.getElementById('messagesContainer');
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message assistant-message';
         
@@ -375,12 +375,12 @@ ${fullResponse}
     }
     
     addMessage(content, type) {
-        const container = document.getElementById('chatMessages');
+        const container = document.getElementById('messagesContainer');
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${type}-message`;
         messageDiv.innerHTML = `<div class="message-content">${content.replace(/\n/g, '<br>')}</div>`;
         container.appendChild(messageDiv);
-        container.scrollTop = container.scrollHeight;
+        document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
     }
     
     updateConversationStats(messageCount, threadId) {
@@ -397,10 +397,6 @@ ${fullResponse}
         
         statsDiv.innerHTML = `
             <div class="stats-content">
-                <span class="stats-label">🧵 Conversation Thread:</span>
-                <span class="stats-value">${threadId}</span>
-                <span class="stats-label">💬 Messages:</span>
-                <span class="stats-value">${messageCount}</span>
                 <button id="resetConversation" class="reset-button">🔄 New Conversation</button>
             </div>
         `;
@@ -420,7 +416,7 @@ ${fullResponse}
             
             if (response.ok) {
                 // Clear chat messages
-                document.getElementById('chatMessages').innerHTML = '';
+                document.getElementById('messagesContainer').innerHTML = '';
                 
                 // Clear stats
                 const statsDiv = document.getElementById('conversationStats');
@@ -438,7 +434,7 @@ ${fullResponse}
     }
     
     addAgentResponse(agentResponse, fullResponse) {
-        const container = document.getElementById('chatMessages');
+        const container = document.getElementById('messagesContainer');
         const responseDiv = document.createElement('div');
         responseDiv.className = 'message agent-message';
         
@@ -583,18 +579,6 @@ ${fullResponse}
             // Plain text response
             displayContent = `<div class="agent-content">${fullResponse || 'No response content'}</div>`;
         }
-        
-        // Always show full response in expandable section
-        displayContent += `
-            <div class="full-response-section">
-                <button class="toggle-full-response" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
-                    📋 Show Full Response
-                </button>
-                <div class="full-response-content" style="display: none;">
-                    <pre>${fullResponse || 'No full response available'}</pre>
-                </div>
-            </div>
-        `;
         
         responseDiv.innerHTML = displayContent;
         container.appendChild(responseDiv);

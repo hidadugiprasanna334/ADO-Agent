@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Azure Foundry Agent Chat</title>
+    <title>ADO Master</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <h1>Azure Foundry Agent Chat</h1>
+            <h1>ADO Master</h1>
             <div class="connection-status" id="connectionStatus">
                 <span class="status-indicator" id="statusIndicator"></span>
                 <span id="statusText">Connecting...</span>
@@ -17,9 +17,11 @@
         </div>
         
         <div class="chat-messages" id="chatMessages">
-            <div class="message system-message">
-                <div class="message-content">
-                    Welcome to Azure Foundry Agent Chat! Start a conversation below.
+            <div class="messages-container" id="messagesContainer">
+                <div class="message system-message">
+                    <div class="message-content">
+                        Welcome to ADO Master! Start a conversation to create Azure DevOps tickets.
+                    </div>
                 </div>
             </div>
         </div>
